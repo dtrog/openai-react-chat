@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from "react";
+import React, {useCallback, useEffect, useState} from "react";
 import {useLocation, useNavigate, useParams} from "react-router-dom";
 import ChatSettingsForm from "./ChatSettingsForm";
 import {ChatSettings} from "../models/ChatSettings";
@@ -57,9 +57,9 @@ const CustomChatEditor: React.FC = () => {
     navigate('/explore');
   };
 
-  const onChange = (updatedChatSettings: ChatSettings) => {
+  const onChange = useCallback((updatedChatSettings: ChatSettings) => {
     setChatSettings(updatedChatSettings);
-  };
+  }, []);
 
   return (
       <div className="h-full">

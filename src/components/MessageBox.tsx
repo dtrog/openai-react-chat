@@ -283,7 +283,7 @@ const MessageBox =
         event.preventDefault();
         event.stopPropagation();
 
-        ChatService.cancelStream();
+        ChatService.abortRequest();
         setLoading(false);
       };
 

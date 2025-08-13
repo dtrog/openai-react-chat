@@ -1,9 +1,9 @@
 import {createContext, useContext} from 'react';
-import {OpenAIModel} from "./models/model";
+import {AIModel} from "./models/model";
 
 interface ModelsContextState {
-  models: OpenAIModel[];
-  setModels: (models: OpenAIModel[]) => void;
+  models: AIModel[];
+  setModels: (models: AIModel[]) => void;
 }
 
 const ModelsContext = createContext<ModelsContextState>({

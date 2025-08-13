@@ -1,12 +1,9 @@
-import {modelDetails, OpenAIModel} from "../models/model";
+import {AIModel, AIProvider, ProviderManager} from "../providers";
 import {ChatCompletion, ChatCompletionMessage, ChatCompletionRequest, ChatMessage, ChatMessagePart, Role} from "../models/ChatCompletion";
-import {OPENAI_API_KEY} from "../config";
 import {CustomError} from "./CustomError";
-import {CHAT_COMPLETIONS_ENDPOINT, MODELS_ENDPOINT} from "../constants/apiEndpoints";
 import {ChatSettings} from "../models/ChatSettings";
-import {CHAT_STREAM_DEBOUNCE_TIME, DEFAULT_MODEL} from "../constants/appConstants";
+import {CHAT_STREAM_DEBOUNCE_TIME} from "../constants/appConstants";
 import {NotificationService} from '../service/NotificationService';
-import { FileData, FileDataRef } from "../models/FileData";
 
 interface CompletionChunk {
   id: string;
@@ -21,16 +18,25 @@ interface CompletionChunkChoice {
   delta: {
     content: string;
   };
-  finish_reason: null | string; // If there can be other values than 'null', use appropriate type instead of string.
+  finish_reason: null | string;
 }
 
 export class ChatService {
-  private static models: Promise<OpenAIModel[]> | null = null;
+  private static models: Promise<AIModel[]> | null = null;
   static abortController: AbortController | null = null;
+  private static currentProvider: AIProvider | null = null;
 
+  static getCurrentProvider(): AIProvider | null {
+    return this.currentProvider;
+  }
+
+  static setProvider(provider: AIProvider): void {
+    this.currentProvider = provider;
+    this.models = null;
+  }
 
   static async mapChatMessagesToCompletionMessages(modelId: string, messages: ChatMessage[]): Promise<ChatCompletionMessage[]> {
-    const model = await this.getModelById(modelId); // Retrieve the model details
+    const model = await this.getModelById(modelId);
     if (!model) {
       throw new Error(`Model with ID '${modelId}' not found`);
     }
@@ -41,303 +47,180 @@ export class ChatService {
         text: message.content
       }];
 
-      if (model.image_support && message.fileDataRef) {
+      if (model.imageSupport && message.fileDataRef) {
         message.fileDataRef.forEach((fileRef) => {
           const fileUrl = fileRef.fileData!.data;
           if (fileUrl) {
             const fileType = (fileRef.fileData!.type.startsWith('image')) ? 'image_url' : fileRef.fileData!.type;
             contentParts.push({
               type: fileType,
-              image_url: {
-                url: fileUrl
-              }
-            });
+              image_url: fileType === 'image_url' ? { url: fileUrl } : undefined
+            } as ChatMessagePart);
           }
         });
       }
+
       return {
         role: message.role,
-        content: contentParts,
+        content: contentParts
       };
     });
   }
 
-
-  static async sendMessage(messages: ChatMessage[], modelId: string): Promise<ChatCompletion> {
-    let endpoint = CHAT_COMPLETIONS_ENDPOINT;
-    let headers = {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_API_KEY}`
-    };
-
-    const mappedMessages = await ChatService.mapChatMessagesToCompletionMessages(modelId,messages);
-
-    const requestBody: ChatCompletionRequest = {
-      model: modelId,
-      messages: mappedMessages,
-    };
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new CustomError(err.error.message, err);
+  static async sendMessage(messages: ChatMessage[], chatSettings: ChatSettings, onMessageReceived?: (message: string) => void): Promise<ChatCompletion> {
+    if (!this.currentProvider) {
+      throw new Error('No AI provider configured');
     }
 
-    return await response.json();
+    if (!chatSettings.model) {
+      throw new Error('No model specified in chat settings');
+    }
+
+    const completionMessages = await this.mapChatMessagesToCompletionMessages(chatSettings.model, messages);
+    
+    const requestBody: ChatCompletionRequest = {
+      messages: completionMessages,
+      model: chatSettings.model,
+      temperature: chatSettings.temperature,
+      top_p: chatSettings.top_p,
+      frequency_penalty: chatSettings.frequency_penalty,
+      presence_penalty: chatSettings.presence_penalty
+    };
+
+    if (chatSettings.stream) {
+      return this.sendStreamingMessage(requestBody, onMessageReceived || (() => {}));
+    } else {
+      return this.currentProvider.createChatCompletion(requestBody);
+    }
   }
 
-  private static lastCallbackTime: number = 0;
-  private static callDeferred: number | null = null;
-  private static accumulatedContent: string = ""; // To accumulate content between debounced calls
+  private static async sendStreamingMessage(requestBody: ChatCompletionRequest, onMessageReceived: (message: string) => void): Promise<ChatCompletion> {
+    if (!this.currentProvider) {
+      throw new Error('No AI provider configured');
+    }
 
-  static debounceCallback(callback: (content: string, fileDataRef: FileDataRef[]) => void, delay: number = CHAT_STREAM_DEBOUNCE_TIME) {
-    return (content: string) => {
-      this.accumulatedContent += content; // Accumulate content on each call
-      const now = Date.now();
-      const timeSinceLastCall = now - this.lastCallbackTime;
+    this.abortController = new AbortController();
+    
+    try {
+      const stream = await this.currentProvider.createChatCompletionStream(requestBody);
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullMessage = '';
 
-      if (this.callDeferred !== null) {
-        clearTimeout(this.callDeferred);
+      const processBuffer = () => {
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (trimmedLine === 'data: [DONE]') {
+            continue;
+          }
+          
+          if (trimmedLine.startsWith('data: ')) {
+            try {
+              const jsonStr = trimmedLine.substring(6);
+              const chunk: CompletionChunk = JSON.parse(jsonStr);
+              
+              if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+                const content = chunk.choices[0].delta.content;
+                fullMessage += content;
+                onMessageReceived(content);
+              }
+            } catch (e) {
+              console.error('Error parsing chunk:', e);
+            }
+          }
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Debounce processing to improve performance
+        await new Promise(resolve => setTimeout(resolve, CHAT_STREAM_DEBOUNCE_TIME));
+        processBuffer();
       }
 
-      this.callDeferred = window.setTimeout(() => {
-        callback(this.accumulatedContent,[]); // Pass the accumulated content to the original callback
-        this.lastCallbackTime = Date.now();
-        this.accumulatedContent = ""; // Reset the accumulated content after the callback is called
-      }, delay - timeSinceLastCall < 0 ? 0 : delay - timeSinceLastCall);  // Ensure non-negative delay
+      // Process any remaining buffer
+      processBuffer();
 
-      this.lastCallbackTime = timeSinceLastCall < delay ? this.lastCallbackTime : now; // Update last callback time if not within delay
-    };
-  }
-
-  static async sendMessageStreamed(chatSettings: ChatSettings, messages: ChatMessage[], callback: (content: string,fileDataRef: FileDataRef[]) => void): Promise<any> {
-    const debouncedCallback = this.debounceCallback(callback);
-    this.abortController = new AbortController();
-    let endpoint = CHAT_COMPLETIONS_ENDPOINT;
-    let headers = {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_API_KEY}`
-    };
-
-    const requestBody: ChatCompletionRequest = {
-      model: DEFAULT_MODEL,
-      messages: [],
-      stream: true,
-    };
-
-    if (chatSettings) {
-      const {model, temperature, top_p, seed} = chatSettings;
-      requestBody.model = model ?? requestBody.model;
-      requestBody.temperature = temperature ?? requestBody.temperature;
-      requestBody.top_p = top_p ?? requestBody.top_p;
-      requestBody.seed = seed ?? requestBody.seed;
-    }
-
-    const mappedMessages = await ChatService.mapChatMessagesToCompletionMessages(requestBody.model,messages);
-    requestBody.messages = mappedMessages;
-
-    let response: Response;
-    try {
-      response = await fetch(endpoint, {
-        method: "POST",
-        headers: headers,
-        body: JSON.stringify(requestBody),
-        signal: this.abortController.signal
-      });
+      // Return a mock completion response for streaming
+      return {
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: requestBody.model,
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0
+        },
+        choices: [{
+          message: {
+            role: Role.Assistant,
+            content: fullMessage,
+            messageType: 'normal' as any
+          } as ChatMessage,
+          finish_reason: 'stop',
+          index: 0
+        }]
+      };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        NotificationService.handleUnexpectedError(error, 'Stream reading was aborted.');
-      } else if (error instanceof Error) {
-        NotificationService.handleUnexpectedError(error, 'Error reading streamed response.');
-      } else {
-        console.error('An unexpected error occurred');
+        throw new CustomError('Request was cancelled', error);
       }
-      return;
-    }
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new CustomError(err.error.message, err);
-    }
-
-    if (this.abortController.signal.aborted) {
-      // todo: propagate to ui?
-      console.log('Stream aborted');
-      return; // Early return if the fetch was aborted
-    }
-
-    if (response.body) {
-      // Read the response as a stream of data
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-
-      let partialDecodedChunk = undefined;
-      try {
-        while (true) {
-          const streamChunk = await reader.read();
-          const {done, value} = streamChunk;
-          if (done) {
-            break;
-          }
-          let DONE = false;
-          let decodedChunk = decoder.decode(value);
-          if (partialDecodedChunk) {
-            decodedChunk = "data: " + partialDecodedChunk + decodedChunk;
-            partialDecodedChunk = undefined;
-          }
-          const rawData = decodedChunk.split("data: ").filter(Boolean);  // Split on "data: " and remove any empty strings
-          const chunks: CompletionChunk[] = rawData.map((chunk, index) => {
-            partialDecodedChunk = undefined;
-            chunk = chunk.trim();
-            if (chunk.length == 0) {
-              return;
-            }
-            if (chunk === '[DONE]') {
-              DONE = true;
-              return;
-            }
-            let o;
-            try {
-              o = JSON.parse(chunk);
-            } catch (err) {
-              if (index === rawData.length - 1) { // Check if this is the last element
-                partialDecodedChunk = chunk;
-              } else if (err instanceof Error) {
-                console.error(err.message);
-              }
-            }
-            return o;
-          }).filter(Boolean); // Filter out undefined values which may be a result of the [DONE] term check
-
-          let accumulatedContet = '';
-          chunks.forEach(chunk => {
-            chunk.choices.forEach(choice => {
-              if (choice.delta && choice.delta.content) {  // Check if delta and content exist
-                const content = choice.delta.content;
-                try {
-                  accumulatedContet += content;
-                } catch (err) {
-                  if (err instanceof Error) {
-                    console.error(err.message);
-                  }
-                  console.log('error in client. continuing...')
-                }
-              } else if (choice?.finish_reason === 'stop') {
-                // done
-              }
-            });
-          });
-          debouncedCallback(accumulatedContet);
-
-          if (DONE) {
-            return;
-          }
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
-          // User aborted the stream, so no need to propagate an error.
-        } else if (error instanceof Error) {
-          NotificationService.handleUnexpectedError(error, 'Error reading streamed response.');
-        } else {
-          console.error('An unexpected error occurred');
-        }
-        return;
-      }
+      throw error;
     }
   }
 
-  static cancelStream = (): void => {
+  static abortRequest(): void {
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
     }
   }
 
-  static getModels = (): Promise<OpenAIModel[]> => {
-    return ChatService.fetchModels();
-  }
-
-  static async getModelById(modelId: string): Promise<OpenAIModel | null> {
-    try {
-      const models = await ChatService.getModels();
-
-      const foundModel = models.find(model => model.id === modelId);
-      if (!foundModel) {
-        throw new CustomError(`Model with ID '${modelId}' not found.`, {
-          code: 'MODEL_NOT_FOUND',
-          status: 404
-        });
-      }
-
-      return foundModel;
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.error('Failed to get models:', error.message);
-        throw new CustomError('Error retrieving models.', {
-          code: 'FETCH_MODELS_FAILED',
-          status: (error as any).status || 500
-        });
-      } else {
-        console.error('Unexpected error type:', error);
-        throw new CustomError('Unknown error occurred.', {
-          code: 'UNKNOWN_ERROR',
-          status: 500
-        });
-      }
+  static async getModels(): Promise<AIModel[]> {
+    if (!this.models) {
+      this.models = this.fetchModels();
     }
-
-  }
-
-
-  static fetchModels = (): Promise<OpenAIModel[]> => {
-    if (this.models !== null) {
-      return Promise.resolve(this.models);
-    }
-    this.models = fetch(MODELS_ENDPOINT, {
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-    })
-        .then(response => {
-          if (!response.ok) {
-            return response.json().then(err => {
-              throw new Error(err.error.message);
-            });
-          }
-          return response.json();
-        })
-        .catch(err => {
-          throw new Error(err.message || err);
-        })
-        .then(data => {
-          const models: OpenAIModel[] = data.data;
-          // Filter, enrich with contextWindow from the imported constant, and sort
-          return models
-              .filter(model => model.id.startsWith("gpt-"))
-              .map(model => {
-                const details = modelDetails[model.id] || {
-                  contextWindowSize: 0,
-                  knowledgeCutoffDate: '',
-                  imageSupport: false,
-                  preferred: false,
-                  deprecated: false,
-                };
-                return {
-                  ...model,
-                  context_window: details.contextWindowSize,
-                  knowledge_cutoff: details.knowledgeCutoffDate,
-                  image_support: details.imageSupport,
-                  preferred: details.preferred,
-                  deprecated: details.deprecated,
-                };
-              })
-              .sort((a, b) => b.id.localeCompare(a.id));
-        });
     return this.models;
-  };
-}
+  }
 
+  private static async fetchModels(): Promise<AIModel[]> {
+    if (!this.currentProvider) {
+      throw new Error('No AI provider configured');
+    }
+
+    try {
+      return await this.currentProvider.getModels();
+    } catch (error) {
+      NotificationService.handleUnexpectedError(error as Error, 'Error loading models');
+      throw error;
+    }
+  }
+
+  static async getModelById(id: string): Promise<AIModel | undefined> {
+    const models = await this.getModels();
+    return models.find(model => model.id === id);
+  }
+
+  static async validateApiKey(): Promise<boolean> {
+    if (!this.currentProvider) {
+      return false;
+    }
+
+    try {
+      await this.currentProvider.getModels();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}

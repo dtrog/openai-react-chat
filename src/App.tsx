@@ -8,9 +8,12 @@ import './App.css';
 import {ToastContainer} from "react-toastify";
 import ExploreCustomChats from "./components/ExploreCustomChats";
 import CustomChatEditor from './components/CustomChatEditor';
+import {UserProvider} from './UserContext';
+import {useProviderInitialization} from './service/ProviderInitializer';
 
-const App = () => {
+const AppContent = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  useProviderInitialization(); // Initialize AI provider based on user settings
 
   const toggleSidebarCollapse = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
@@ -58,6 +61,14 @@ const App = () => {
           </div>
         </I18nextProvider>
       </BrowserRouter>
+  );
+};
+
+const App = () => {
+  return (
+    <UserProvider>
+      <AppContent />
+    </UserProvider>
   );
 };
 

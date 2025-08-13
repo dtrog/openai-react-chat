@@ -1,17 +1,18 @@
-import {OpenAIModel} from "../models/model";
-import {OPENAI_API_KEY} from "../config";
+import {AIModel} from "../models/model";
+import {ENV_CONFIG} from "../config";
 import {CustomError} from "./CustomError";
 import {MODELS_ENDPOINT, TTS_ENDPOINT} from "../constants/apiEndpoints";
 import {SpeechSettings} from "../models/SpeechSettings"; // Adjust the path as necessary
+import { ProviderConfig } from "../providers";
 
 export class SpeechService {
-  private static models: Promise<OpenAIModel[]> | null = null;
+  private static models: Promise<AIModel[]> | null = null;
 
   static async textToSpeech(text: string, settings: SpeechSettings): Promise<string> {
     const endpoint = TTS_ENDPOINT;
     const headers = {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Authorization": `Bearer ${ENV_CONFIG.api_key}`,
     };
 
     if (text.length > 4096) {
@@ -45,11 +46,11 @@ export class SpeechService {
     return URL.createObjectURL(blob);
   }
 
-  static getModels = (): Promise<OpenAIModel[]> => {
+  static getModels = (): Promise<AIModel[]> => {
     return SpeechService.fetchModels();
   };
 
-  static async fetchModels(): Promise<OpenAIModel[]> {
+  static async fetchModels(): Promise<AIModel[]> {
     if (this.models !== null) {
       return this.models;
     }
@@ -57,7 +58,7 @@ export class SpeechService {
     try {
       const response = await fetch(MODELS_ENDPOINT, {
         headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "Authorization": `Bearer ${ENV_CONFIG.api_key}`,
         },
       });
 
@@ -67,7 +68,7 @@ export class SpeechService {
       }
 
       const data = await response.json();
-      const models: OpenAIModel[] = data.data.filter((model: OpenAIModel) => model.id.includes("tts"));
+      const models: AIModel[] = data.data.filter((model: AIModel) => model.id.includes("tts"));
       this.models = Promise.resolve(models);
       return models;
     } catch (err: any) {

@@ -9,7 +9,7 @@ import {EditableField} from './EditableField';
 import {useTranslation} from 'react-i18next';
 import {NotificationService} from "../service/NotificationService";
 import FormLabel from "./FormLabel";
-import {DEFAULT_MODEL} from "../constants/appConstants";
+// import {DEFAULT_MODEL} from "../constants/appConstants";
 
 interface ChatSettingsFormProps {
   chatSettings?: ChatSettings;
@@ -34,28 +34,32 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({chatSettings, readOn
   const [formData, setFormData] = useState<ChatSettings>(chatSettings || DUMMY_CHAT_SETTINGS);
   const {t} = useTranslation();
 
-  useEffect(() => {
-    if (onChange) {
-      onChange(formData);
-    }
-  }, [formData]);
 
   useEffect(() => {
     setFormData(chatSettings || DUMMY_CHAT_SETTINGS);
   }, [chatSettings]);
 
   const onImageChange = (image: ImageSource) => {
-    setFormData({...formData, icon: image});
+    const updatedData = {...formData, icon: image};
+    setFormData(updatedData);
+    if (onChange) {
+      onChange(updatedData);
+    }
   };
 
   const handleInputChange = (
       event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
     const {name, value, type} = event.target;
+    let updatedData;
     if (type === 'number') {
-      setFormData({...formData, [name]: value ? parseFloat(value) : null});
+      updatedData = {...formData, [name]: value ? parseFloat(value) : null};
     } else {
-      setFormData({...formData, [name]: value});
+      updatedData = {...formData, [name]: value};
+    }
+    setFormData(updatedData);
+    if (onChange) {
+      onChange(updatedData);
     }
   };
 
@@ -120,14 +124,17 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({chatSettings, readOn
                 label={t('model-header')}
                 value={formData.model}
                 defaultValue={null}
-                defaultValueLabel={DEFAULT_MODEL}
+                defaultValueLabel={""}
                 editorComponent={(props) =>
                     <ModelSelect value={formData.model}
                                  onModelSelect={props.onValueChange}
-                                 models={[]} allowNone={true}
-                                 allowNoneLabel="Default"/>}
+                                 models={[]} />}
                 onValueChange={(value: string | null) => {
-                  setFormData({...formData, model: value});
+                  const updatedData = {...formData, model: value};
+                  setFormData(updatedData);
+                  if (onChange) {
+                    onChange(updatedData);
+                  }
                 }}
             />
           </div>
@@ -153,7 +160,11 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({chatSettings, readOn
               defaultValueLabel="1.0"
               editorComponent={TemperatureSlider}
               onValueChange={(value: number | null) => {
-                setFormData({...formData, temperature: value});
+                const updatedData = {...formData, temperature: value};
+                setFormData(updatedData);
+                if (onChange) {
+                  onChange(updatedData);
+                }
               }}
           />
           <EditableField<number | null>
@@ -165,7 +176,11 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({chatSettings, readOn
               defaultValueLabel="1.0"
               editorComponent={TopPSlider}
               onValueChange={(value: number | null) => {
-                setFormData({...formData, top_p: value});
+                const updatedData = {...formData, top_p: value};
+                setFormData(updatedData);
+                if (onChange) {
+                  onChange(updatedData);
+                }
               }}
           />
         </form>

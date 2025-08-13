@@ -1,4 +1,6 @@
 import React, {createContext, ReactNode, useEffect, useState} from 'react';
+import { ProviderConfig } from './providers/types';
+import providersJson from './providers.json';
 
 export type UserTheme = 'light' | 'dark' | 'system';
 export type Theme = 'light' | 'dark';
@@ -11,7 +13,26 @@ interface UserSettings {
   speechModel: string | null;
   speechVoice: string | null;
   speechSpeed: number | null;
+  activeProvider: string;
+  providerConfigs: ProviderConfig[];
 }
+
+const getInitialProviderConfigs = (): ProviderConfig[] => {
+  // Load all enabled providers from providers.json
+  const enabledProviders = (providersJson as any[]).filter(p => p.enabled);
+  
+  return enabledProviders.map(provider => ({
+    name: provider.name,
+    apiKey: provider.apiKey || '',
+    baseUrl: provider.baseUrl
+  }));
+};
+
+const getInitialActiveProvider = (): string => {
+  // Find first enabled provider from providers.json
+  const enabledProviders = (providersJson as any[]).filter(p => p.enabled);
+  return enabledProviders.length > 0 ? enabledProviders[0].name : '';
+};
 
 const defaultUserSettings: UserSettings = {
   userTheme: 'system',
@@ -19,8 +40,10 @@ const defaultUserSettings: UserSettings = {
   model: null,
   instructions: '',
   speechModel: 'tts-1',
+  speechSpeed: 1.0,
+  activeProvider: '',
+  providerConfigs: [],
   speechVoice: 'echo',
-  speechSpeed: 1.0
 };
 
 const determineEffectiveTheme = (userTheme: UserTheme): Theme => {
@@ -37,14 +60,14 @@ export const UserContext = createContext<{
   userSettings: defaultUserSettings,
   setUserSettings: () => {
   },
-});
+  });
 
 interface UserProviderProps {
   children: ReactNode;
 }
 
 export const UserProvider = ({children}: UserProviderProps) => {
-  const [userSettings, setUserSettings] = useState<UserSettings>(() => {
+    const [userSettings, setUserSettings] = useState<UserSettings>(() => {
     const storedUserTheme = localStorage.getItem('theme');
     const userTheme: UserTheme = (storedUserTheme === 'light' || storedUserTheme === 'dark' || storedUserTheme === 'system') ? storedUserTheme : defaultUserSettings.userTheme;
 
@@ -52,6 +75,19 @@ export const UserProvider = ({children}: UserProviderProps) => {
     const instructions = localStorage.getItem('defaultInstructions') || defaultUserSettings.instructions;
     const speechModel = localStorage.getItem('defaultSpeechModel') || defaultUserSettings.speechModel;
     const speechVoice = localStorage.getItem('defaultSpeechVoice') || defaultUserSettings.speechVoice;
+    const activeProvider = localStorage.getItem('activeProvider') || getInitialActiveProvider();
+    const storedProviderConfigs = localStorage.getItem('providerConfigs');
+    let providerConfigs: ProviderConfig[];
+    if (storedProviderConfigs) {
+      try {
+        const parsed = JSON.parse(storedProviderConfigs);
+        providerConfigs = Array.isArray(parsed) ? parsed : getInitialProviderConfigs();
+      } catch {
+        providerConfigs = getInitialProviderConfigs();
+      }
+    } else {
+      providerConfigs = getInitialProviderConfigs();
+    }
 
     const speechSpeedRaw = localStorage.getItem('defaultSpeechSpeed');
     const speechSpeed = speechSpeedRaw !== null ? Number(speechSpeedRaw) : defaultUserSettings.speechSpeed;
@@ -63,11 +99,13 @@ export const UserProvider = ({children}: UserProviderProps) => {
       theme: effectiveTheme,
       model,
       instructions,
-      speechModel,
+  speechModel,
       speechVoice,
-      speechSpeed
+      speechSpeed,
+      activeProvider,
+      providerConfigs
     };
-  });
+    });
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -79,7 +117,7 @@ export const UserProvider = ({children}: UserProviderProps) => {
       mediaQuery.removeEventListener('change', mediaQueryChangeHandler);
     };
   }, []);
-
+    
   useEffect(() => {
     localStorage.setItem('theme', userSettings.userTheme);
   }, [userSettings.userTheme]);
@@ -96,7 +134,7 @@ export const UserProvider = ({children}: UserProviderProps) => {
     if (userSettings.instructions === '') {
       localStorage.removeItem('defaultInstructions');
     } else {
-      localStorage.setItem('defaultInstructions', userSettings.instructions);
+localStorage.setItem('defaultInstructions', userSettings.instructions);
     }
   }, [userSettings.instructions]);
 
@@ -104,7 +142,7 @@ export const UserProvider = ({children}: UserProviderProps) => {
     const newEffectiveTheme = determineEffectiveTheme(userSettings.userTheme);
     setUserSettings(prevSettings => ({...prevSettings, theme: newEffectiveTheme}));
 
-    if (newEffectiveTheme === 'dark') {
+        if (newEffectiveTheme === 'dark') {
       document.body.classList.add('dark');
     } else {
       document.body.classList.remove('dark');
@@ -115,7 +153,7 @@ export const UserProvider = ({children}: UserProviderProps) => {
     const newSystemTheme: Theme = e.matches ? 'dark' : 'light';
     if (userSettings.userTheme === 'system') {
       setUserSettings((prevSettings) => ({
-        ...prevSettings,
+...prevSettings,
         theme: newSystemTheme,
       }));
     }
@@ -150,12 +188,20 @@ export const UserProvider = ({children}: UserProviderProps) => {
   }, [userSettings.speechVoice]);
 
   useEffect(() => {
-    if (userSettings.speechSpeed === null || userSettings.speechSpeed === undefined || userSettings.speechSpeed < 0.25 || userSettings.speechSpeed > 4.0) {
+  if (userSettings.speechSpeed === null || userSettings.speechSpeed === undefined || userSettings.speechSpeed < 0.25 || userSettings.speechSpeed > 4.0) {
       localStorage.removeItem('defaultSpeechSpeed');
     } else {
       localStorage.setItem('defaultSpeechSpeed', String(userSettings.speechSpeed));
     }
   }, [userSettings.speechSpeed]);
+
+  useEffect(() => {
+    localStorage.setItem('activeProvider', userSettings.activeProvider);
+  }, [userSettings.activeProvider]);
+
+  useEffect(() => {
+    localStorage.setItem('providerConfigs', JSON.stringify(userSettings.providerConfigs));
+  }, [userSettings.providerConfigs]);
 
   return (
       <UserContext.Provider value={{userSettings, setUserSettings}}>

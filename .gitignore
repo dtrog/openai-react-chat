@@ -16,6 +16,8 @@
 
 # local env
 local.env.json
+providers.json
+.env
 
 # misc
 .DS_Store
@@ -28,3 +30,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 src/tailwind.css
+package-lock.json
+package-lock.json
+.vscode/settings.json
+atlantis-prompt.txt
+CLAUDE.md
+backend/data/chat.db
+node_modules

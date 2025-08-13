@@ -1,5 +1,16 @@
-import env from './local.env.json';
+import localConfig from './local.env.json';
 
-export const OPENAI_API_KEY = (env as any).openapi_key;
-export const OPENAI_DEFAULT_MODEL: string = (env as any).default_model;
-export const OPENAI_DEFAULT_SYSTEM_PROMPT: string = (env as any).default_system_prompt;
+export interface EnvironmentConfig {
+  api_key?: string;
+  default_model?: string;
+  api_base_url?: string;
+  default_system_prompt?: string;
+  providers?: Record<string, {
+    apiKey: string;
+    baseUrl?: string;
+  }>;
+  default_provider?: string;
+}
+
+// Load configuration from local.env.json
+export const ENV_CONFIG: EnvironmentConfig = localConfig;

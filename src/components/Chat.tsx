@@ -1,17 +1,18 @@
 import React, {useContext, useEffect, useRef, useState} from 'react';
 import ChatBlock from "./ChatBlock";
 import ModelSelect from "./ModelSelect";
-import {OpenAIModel} from "../models/model";
-import {ChatService} from "../service/ChatService";
+import ProviderSelect from "./ProviderSelect";
+import {AIModel} from "../providers/types";
+import { discoverProviderModels } from '../service/ModelDiscoveryService';
 import {ChatMessage} from "../models/ChatCompletion";
 import {useTranslation} from 'react-i18next';
 import Tooltip from "./Tooltip";
 import {Conversation} from "../service/ConversationService";
-import {OPENAI_DEFAULT_SYSTEM_PROMPT} from "../config";
 import {DEFAULT_INSTRUCTIONS} from "../constants/appConstants";
 import {UserContext} from '../UserContext';
 import {InformationCircleIcon} from "@heroicons/react/24/outline";
 import {NotificationService} from '../service/NotificationService';
+import { ProviderManager } from '../providers/ProviderManager';
 
 interface Props {
   chatBlocks: ChatMessage[];
@@ -29,19 +30,32 @@ const Chat: React.FC<Props> = ({
                                }) => {
   const {userSettings, setUserSettings} = useContext(UserContext);
   const {t} = useTranslation();
-  const [models, setModels] = useState<OpenAIModel[]>([]);
+  const [models, setModels] = useState<AIModel[]>([]);
   const chatDivRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    ChatService.getModels()
-        .then(models => {
-          setModels(models);
-        })
-        .catch(err => {
-          NotificationService.handleUnexpectedError(err, 'Failed to get list of models');
-        });
-
-  }, []);
+    const loadModels = async () => {
+      if (!userSettings.activeProvider) {
+        setModels([]);
+        return;
+      }
+      try {
+        const providerConfig = userSettings.providerConfigs.find(
+          (p) => p.name === userSettings.activeProvider
+        );
+        if (!providerConfig) {
+          setModels([]);
+          return;
+        }
+        const models = await discoverProviderModels(userSettings.activeProvider, providerConfig);
+        setModels(models);
+      } catch (err) {
+        NotificationService.handleUnexpectedError(err as Error, 'Failed to get list of models');
+        setModels([]);
+      }
+    };
+    loadModels();
+  }, [userSettings.activeProvider, userSettings.providerConfigs]);
 
   useEffect(() => {
     if (chatDivRef.current && allowAutoScroll) {
@@ -61,13 +75,13 @@ const Chat: React.FC<Props> = ({
     }
   }, []);
 
-  const findModelById = (id: string | null): OpenAIModel | undefined => {
+  const findModelById = (id: string | null): AIModel | undefined => {
     return models.find(model => model.id === id);
   };
 
-  const formatContextWindow = (context_window: number | undefined) => {
-    if (context_window) {
-      return Math.round(context_window / 1000) + 'k';
+  const formatContextWindow = (contextWindow: number | undefined) => {
+    if (contextWindow) {
+      return Math.round(contextWindow / 1000) + 'k';
     }
     return '?k';
   }
@@ -98,7 +112,7 @@ const Chat: React.FC<Props> = ({
             <div className="flex items-center flex-row gap-1">
               {!conversation ? '' : (
                   <Tooltip
-                      title={conversation.systemPrompt ?? userSettings.instructions ?? OPENAI_DEFAULT_SYSTEM_PROMPT ?? DEFAULT_INSTRUCTIONS}
+                      title={conversation.systemPrompt ?? userSettings.instructions ?? DEFAULT_INSTRUCTIONS}
                       side="bottom" sideOffset={10}>
                               <span style={{marginLeft: '10px', fontSize: '0.85rem', color: '#6b7280'}}>
                                  <InformationCircleIcon width={20} height={20} stroke={'currentColor'}/>
@@ -113,12 +127,12 @@ const Chat: React.FC<Props> = ({
                                   <span style={{marginLeft: '0.25em'}}>{conversation.model}</span>
                                   <Tooltip title={t('context-window')} side="bottom" sideOffset={10}>
                                       <span style={{marginLeft: '10px', fontSize: '0.85rem', color: '#6b7280'}}>
-                                        {formatContextWindow(findModelById(conversation.model)?.context_window)}
+                                        {formatContextWindow(findModelById(conversation.model)?.contextWindow)}
                                       </span>
                                   </Tooltip>
                                      <Tooltip title={t('knowledge-cutoff')} side="bottom" sideOffset={10}>
                                       <span style={{marginLeft: '10px', fontSize: '0.85rem', color: '#6b7280'}}>
-                                        {findModelById(conversation.model)?.knowledge_cutoff}
+                                        {findModelById(conversation.model)?.knowledgeCutoff}
                                       </span>
                                   </Tooltip>
                               </span>
@@ -126,9 +140,14 @@ const Chat: React.FC<Props> = ({
                 }
                         </span>
               {!conversation && (
-                  <span className="grow" style={{width: '50ch'}}>
-                          <ModelSelect value={model} onModelSelect={onModelChange} models={models}/>
-                        </span>
+                  <div className="grow flex space-x-2" style={{width: '70ch'}}>
+                    <div className="w-1/2">
+                      <ProviderSelect />
+                    </div>
+                    <div className="w-1/2">
+                      <ModelSelect value={model} onModelSelect={onModelChange} models={models as any}/>
+                    </div>
+                  </div>
               )}
             </div>
           </div>
